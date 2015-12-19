@@ -731,6 +731,23 @@ static inline int mmci_dma_prep_data(struct mmci_host *host, struct mmc_data *da
 
 #endif
 
+static void mmci_check_busy(struct mmci_host *host)
+{
+	/* For SDIO, wait until the device is not busy */
+	if (host->variant->sdio && host->mmc->card &&
+		mmc_card_sdio(host->mmc->card)) {
+		int count = 0;
+		while (readl(host->base + MMCISTATUS) & MCI_ST_CARDBUSY) {
+			udelay(10);
+			if (++count > 50000) {
+				dev_err(mmc_dev(host->mmc),
+					"Time out 500msec.\n");
+				break;
+			}
+		}
+	}
+}
+
 static void mmci_setup_datactrl(struct mmci_host *host, struct mmc_data *data)
 {
 	struct variant_data *variant = host->variant;
@@ -741,6 +758,8 @@ static void mmci_setup_datactrl(struct mmci_host *host, struct mmc_data *data)
 
 	dev_dbg(mmc_dev(host->mmc), "blksz %04x blks %04x flags %08x\n",
 		data->blksz, data->blocks, data->flags);
+
+	mmci_check_busy(host);
 
 	host->data = data;
 	host->size = data->blksz * data->blocks;
@@ -805,6 +824,8 @@ static void mmci_start_data(struct mmci_host *host, struct mmc_data *data)
 	struct variant_data *variant = host->variant;
 	void __iomem *base = host->base;
 
+	mmci_check_busy(host);
+
 	/*
 	 * Attempt to use DMA operation mode, if this
 	 * should fail, fall back to PIO mode
@@ -847,6 +868,8 @@ mmci_start_command(struct mmci_host *host, struct mmc_command *cmd, u32 c)
 	dev_dbg(mmc_dev(host->mmc), "op %02x arg %08x flags %08x\n",
 	    cmd->opcode, cmd->arg, cmd->flags);
 
+	mmci_check_busy(host);
+
 	if (readl(base + MMCICOMMAND) & MCI_CPSM_ENABLE) {
 		writel(0, base + MMCICOMMAND);
 		udelay(1);
@@ -870,6 +893,20 @@ mmci_start_command(struct mmci_host *host, struct mmc_command *cmd, u32 c)
 		mmci_set_clkreg(host, 25000000);
 
 	host->cmd = cmd;
+
+	if (host->variant->sdio &&
+		host->mmc->card &&
+		mmc_card_sdio(host->mmc->card))	{
+		while (!gpio_get_value(211)) {
+	    	udelay(10);
+    
+	    	if (count > 50000) {
+				printk("Time out 500msec.\n");
+				break;
+			}
+			count++;
+		}
+	}
 
 	writel(cmd->arg, base + MMCIARGUMENT);
 	writel(c, base + MMCICOMMAND);
